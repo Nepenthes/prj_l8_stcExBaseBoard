@@ -1,0 +1,934 @@
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE USRMAIN
+OBJECT MODULE PLACED IN .\Objects\usrMain.obj
+COMPILER INVOKED BY: F:\KEIL\Software\C51\BIN\C51.EXE usrMain\usrMain.c LARGE OMF2 OPTIMIZE(8,SPEED) BROWSE INCDIR(.\usr
+                    -Main) DEBUG PRINT(.\Listings\usrMain.lst) OBJECT(.\Objects\usrMain.obj)
+
+line level    source
+
+   1          #include "intrins.h"
+   2          #include "stdio.h"
+   3          #include "string.h"
+   4          
+   5          #include "type_def.h"
+   6          #include "STC8xxxx.H"
+   7          #include "STC8G_H_Switch.h"
+   8          
+   9          /*************************************************************************/
+  10          /*P54½Å×ö½ÓÊÕ½Å*/
+  11          /*Ö÷Æµ24M*/
+  12          /**/
+  13          /*************************************************************************/
+  14          
+  15          //========================================================================
+  16          //                               Ö÷Ê±ÖÓ¶¨Òå
+  17          //========================================================================
+  18          
+  19          //#define MAIN_Fosc             22118400L       //¶¨ÒåÖ÷Ê±ÖÓ
+  20          //#define MAIN_Fosc             12000000L       //¶¨ÒåÖ÷Ê±ÖÓ
+  21          //#define MAIN_Fosc             11059200L       //¶¨ÒåÖ÷Ê±ÖÓ
+  22          //#define MAIN_Fosc              5529600L       //¶¨ÒåÖ÷Ê±ÖÓ
+  23          #define MAIN_Fosc               24000000L       //¶¨ÒåÖ÷Ê±ÖÓ
+  24          
+  25          #define UART1_BAUDRATE  (65536UL - (MAIN_Fosc / 4) / 115200UL)
+  26          
+  27          #define UART_DEVDRV_PROTOCOL_HEAD_M             0xEF
+  28          #define UART_DEVDRV_PROTOCOL_HEAD_S             0xEE
+  29                                                                             
+  30          #define UART_DATA_RX_TOUT                               15      
+  31          #define UART_DATA_RX_QLEN                               64
+  32                                                                             
+  33          #define DEV_DIMMER_MODULATION_TIME_LAG  10      
+  34          #define DEV_FANS_MODULATION_TIME_LAG    10      
+  35          
+  36          #define DEV_DIMMER_PIN_OUTPUT_SET(a)    P32 = a         
+  37          #define DEV_FANS_PIN_OUTPUT_SET(a)              P32 = a 
+  38          
+  39          #define L8_DEVICE_TYPEDEFINE_BASE_ADDR  (0x49)
+  40          
+  41          #define DEV_FAN_FULL_LOAD_EN            1
+  42          #define DEV_FAN_SHOCK_EXCUTE_EN         0               
+  43          
+  44          #define DEV_DIMMER_FULL_LOAD_EN         0
+  45          
+  46          #define PRJ_MODE_DBG                            0x0A
+  47          #define PRJ_MODE_EXCUTE                         0x0B
+  48          #define PRJ_MODE_DEF                            PRJ_MODE_EXCUTE
+  49          
+  50          typedef enum{
+  51          
+  52                  devTypeDef_mulitSwOneBit = (L8_DEVICE_TYPEDEFINE_BASE_ADDR + 1),
+  53                  devTypeDef_mulitSwTwoBit,
+  54                  devTypeDef_mulitSwThreeBit,
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 2   
+
+  55                  devTypeDef_dimmer,
+  56                  devTypeDef_fans,
+  57                  devTypeDef_scenario,
+  58                  devTypeDef_curtain,
+  59                  devTypeDef_thermostat = (L8_DEVICE_TYPEDEFINE_BASE_ADDR + 0x1E),
+  60                  devTypeDef_heater = (L8_DEVICE_TYPEDEFINE_BASE_ADDR + 0x1F),
+  61          }devTypeDef_enum;
+  62                                                                             
+  63          typedef struct __stt_uartProtocolFormat{
+  64          
+  65                  uint8_t pHead;
+  66                  uint8_t command;
+  67                  uint8_t dats;
+  68                  uint8_t pTailCheck;
+  69                  
+  70          }stt_protocolFmtUartDevDrv;
+  71          
+  72          typedef struct{
+  73                  uint16_t ltmrPeriod;
+  74                  uint16_t ltmrCounter;
+  75          }sttLoopTmr;
+  76          
+  77          typedef struct{
+  78                  uint16_t ltmrPeriod;
+  79                  uint16_t ltmrCounter:15;
+  80                  uint16_t ltmr_tUpFlg:1;
+  81          }sttLoopTmr_exa;
+  82          
+  83          bit UART1_TX_BUSY_FLG = 0;
+  84                          
+  85          static sttLoopTmr ltmrSecondSpfy = {(1000 * 20) - 1, 0};
+  86          static sttLoopTmr ltmrMsSpfy = {(1 * 20) - 1, 0};
+  87          static sttLoopTmr ltmrWdtSpfy = {100 - 1, 0}; //Î¹¹·¼ÆÊ±±äÁ¿
+  88          static sttLoopTmr_exa ltmr_a = {1 - 1, 0, 0};
+  89          
+  90          static uint16_t dataReq_actionCounter = 1;
+  91          
+  92          static struct __stt_dimmer_debugAttr{
+  93          
+  94                  uint8_t frepCounter;
+  95                  uint8_t frepConfirm;
+  96          }xdata devDimmer_debugParam = {0};
+  97          
+  98          static struct __stt_fans_debugAttr{
+  99          
+ 100                  uint8_t frepCounter;
+ 101                  uint8_t frepConfirm;
+ 102          }xdata devFans_debugParam = {0};
+ 103                                  
+ 104          static struct __stt_dimmer_attrFreq{ //
+ 105          
+ 106                  u8 breightness;
+ 107                  
+ 108                  u8 periodBeat_cfm; 
+ 109                  u8 periodBeat_counter; 
+ 110                  
+ 111                  u16 pwm_actEN:1;
+ 112                  u16 pwm_actCounter:15;
+ 113                  u8      pwm_actWaitCounter;
+ 114                  
+ 115          }volatile xdata devDimmer_freqParam = {0};
+ 116          
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 3   
+
+ 117          static struct __stt_fans_attrFreq{ //
+ 118          
+ 119                  u8 speed;
+ 120                  
+ 121                  u8 periodBeat_cfm; 
+ 122                  u8 periodBeat_counter; 
+ 123                  
+ 124                  u16 pwm_actEN:1;
+ 125                  u16 pwm_actCounter:15;
+ 126                  u8      pwm_actWaitCounter;
+ 127                  
+ 128          }volatile xdata devFans_freqParam = {0};
+ 129          static bit devFans_excuteActivated_flg = FALSE;
+ 130                          
+ 131          static struct __stt_deviceRunningParam{
+ 132          
+ 133                  uint8_t deviceType;
+ 134                  
+ 135                  struct __stt_devStatusDef{
+ 136                  
+ 137                          uint8_t deviceDimmer_brightness;
+ 138                          uint8_t deviceFans_speed;
+ 139                          uint8_t deviceOther_relayVal;
+ 140                          
+ 141                  }devStatus;
+ 142                  
+ 143          }xdata deviceRunningParam = {
+ 144          
+ 145                  devTypeDef_dimmer,
+ 146                  {0, 0, 0},
+ 147          };
+ 148          
+ 149          static struct __stt_dataRcv_attrJudge{
+ 150          
+ 151                            uint8_t rcvStart_flg:1;
+ 152                  const uint8_t rcvTimeout_period:7;
+ 153                          
+ 154                            uint8_t rcvTimeout_counter;
+ 155                            
+ 156          }devUart_dataRcvJudgeAttr = {
+ 157          
+ 158                  0, UART_DATA_RX_TOUT, 0,
+ 159          };
+ 160          static struct __stt_dataRcv{
+ 161          
+ 162                  uint8_t dataRcvTout_trigFlg:1;
+ 163                  uint8_t dataRcvTout_completeFlg:1;
+ 164                  
+ 165                  uint8_t  dataRcv_tmp[UART_DATA_RX_QLEN];
+ 166                  uint8_t  dataRcvIst_tmp;
+ 167                  uint8_t  dataRcv_cfm[UART_DATA_RX_QLEN];
+ 168                  uint8_t  dataRcvLen_cfm;
+ 169                  
+ 170          }xdata devUart_dataRcvBuf = {0};
+ 171          static uint8_t devUart_dataSendBuf[UART_DATA_RX_QLEN] = {0};
+ 172          
+ 173          static unsigned char frame_Check(unsigned char frame_temp[], u8 check_num){
+ 174   1        
+ 175   1              unsigned char loop              = 0;
+ 176   1              unsigned char val_Check = 0;
+ 177   1              
+ 178   1      //      for(loop = 0; loop < check_num; loop ++){
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 4   
+
+ 179   1      //      
+ 180   1      //              val_Check += frame_temp[loop];
+ 181   1      //      }
+ 182   1      //      
+ 183   1      //      val_Check  = ~val_Check;
+ 184   1      //      val_Check ^= 0xa7;
+ 185   1              
+ 186   1              for(loop = 0; loop < check_num; loop ++){
+ 187   2              
+ 188   2                      val_Check ^= frame_temp[loop];
+ 189   2              }
+ 190   1              
+ 191   1              return val_Check;
+ 192   1      }
+ 193          
+ 194          static void sysPeriphInit_uart1(void){
+ 195   1              
+ 196   1              TR1 = 0;
+ 197   1              AUXR &= ~0x01;
+ 198   1              AUXR |= (1<<6);
+ 199   1              TMOD &= ~(1<<6);
+ 200   1              TMOD &= ~0x30;
+ 201   1              TH1 = (u8)(UART1_BAUDRATE / 256);
+ 202   1              TL1 = (u8)(UART1_BAUDRATE % 256);
+ 203   1              ET1 = 0;
+ 204   1              INT_CLKO &= ~0x02;
+ 205   1              TR1 = 1;
+ 206   1              
+ 207   1              /*Timer2ÔÝÊ±Ã»ÓÃ*/
+ 208   1      //      AUXR &= ~(1<<4);        //Timer stop
+ 209   1      //      AUXR |= 0x01;           //S1 BRT Use Timer2;
+ 210   1      //      AUXR &= ~(1<<3);        //Timer2 set As Timer
+ 211   1      //      AUXR |=  (1<<2);        //Timer2 set as 1T mode
+ 212   1      //      TH2 = (u8)(UART1_BAUDRATE / 256);
+ 213   1      //      TL2 = (u8)(UART1_BAUDRATE % 256);
+ 214   1      //      IE2  &= ~(1<<2);        //½ûÖ¹ÖÐ¶Ï
+ 215   1      //      AUXR |=  (1<<4);        //Timer run enable
+ 216   1              
+ 217   1              SCON = (SCON & 0x3f) | 0x40;
+ 218   1              // PS = 1;
+ 219   1              ES = 1;
+ 220   1              REN = 1;
+ 221   1      #if(PRJ_MODE_DEF == PRJ_MODE_EXCUTE)
+ 222   1              P_SW1 &= 0x3f;
+ 223   1              P_SW1 |= (2 << 6);
+ 224   1      #endif
+ 225   1              UART1_TX_BUSY_FLG = 0;
+ 226   1      }
+ 227          
+ 228          static void usrApp_uart1StringSend(u8 *puts)
+ 229          {
+ 230   1              for(; *puts != 0; puts++){
+ 231   2                      
+ 232   2                      SBUF = *puts;
+ 233   2                      UART1_TX_BUSY_FLG = 1;
+ 234   2                      while(UART1_TX_BUSY_FLG);
+ 235   2              }
+ 236   1      }
+ 237          
+ 238          static void usrApp_uart1DataSend(uint8_t *dptr, uint16_t len){
+ 239   1      
+ 240   1              uint16_t loop = 0;
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 5   
+
+ 241   1              uint16_t uartData_txLen = 0;
+ 242   1              
+ 243   1              (len > UART_DATA_RX_QLEN)?
+ 244   1                      (uartData_txLen = UART_DATA_RX_QLEN):
+ 245   1                      (uartData_txLen = len);
+ 246   1      
+ 247   1              memset(devUart_dataSendBuf, 0, sizeof(uint8_t) * UART_DATA_RX_QLEN);
+ 248   1              memcpy(devUart_dataSendBuf, dptr, sizeof(uint8_t) * uartData_txLen);
+ 249   1              
+ 250   1              for(loop = 0; loop < uartData_txLen; loop ++){
+ 251   2              
+ 252   2                      SBUF = devUart_dataSendBuf[loop];
+ 253   2                      UART1_TX_BUSY_FLG = 1;
+ 254   2                      while(UART1_TX_BUSY_FLG);
+ 255   2              }
+ 256   1      }
+ 257          
+ 258          static void sysPeriphInit_exInt1(void){
+ 259   1      
+ 260   1          IT1 = 1; 
+ 261   1          EX1 = 1;
+ 262   1          EA = 1;
+ 263   1      }
+ 264          
+ 265          static void sysPeriphInit_timer0(void){  
+ 266   1              
+ 267   1              AUXR |= 0x80;           
+ 268   1              TMOD &= 0xF0;   
+ 269   1      //      TL0 = 0xD7; //11.0592M
+ 270   1      //      TH0 = 0xFD;
+ 271   1              TL0 = 0x50; //24M
+ 272   1              TH0 = 0xFB;
+ 273   1              ET0 = 1;        
+ 274   1              TR0 = 1;        
+ 275   1      }
+ 276          
+ 277          static void sysPeriphInit_gpio(void){
+ 278   1      
+ 279   1              P3M0 |= (1 << 2);
+ 280   1              P3M1 &= ~(1 << 2);
+ 281   1      }
+ 282          
+ 283          static void sysPeriphInit_wdt(void){
+ 284   1      
+ 285   1      //      WDT_CONTR = 0x23; //0.5s
+ 286   1              WDT_CONTR = 0x24; //1s
+ 287   1      //      WDT_CONTR = 0x27; //8s
+ 288   1      }
+ 289          
+ 290          void systemPeripheralsInitialization(void){
+ 291   1      
+ 292   1              EA = 0;
+ 293   1              
+ 294   1              sysPeriphInit_uart1();
+ 295   1              sysPeriphInit_exInt1();
+ 296   1              sysPeriphInit_timer0();
+ 297   1              sysPeriphInit_gpio();
+ 298   1              sysPeriphInit_wdt();
+ 299   1              
+ 300   1              Timer0_Polity(3); //¶¨Ê±Æ÷ÖÐ¶ÏÓÅÏÈ¼¶×î¸ß
+ 301   1              INT1_Polity(2);
+ 302   1              UART1_Polity(1);
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 6   
+
+ 303   1              
+ 304   1              EA = 1;
+ 305   1      }
+ 306          
+ 307          static void systemFunc_wdtFeed(void){
+ 308   1      
+ 309   1              WDT_CONTR |= 0x10;
+ 310   1      }
+ 311          
+ 312          void funcInterrupt_uart1(void) interrupt UART1_VECTOR
+ 313          {
+ 314   1              if(TI){
+ 315   2                      TI = 0;
+ 316   2                      
+ 317   2                      UART1_TX_BUSY_FLG = 0;
+ 318   2              }
+ 319   1              
+ 320   1              if(RI){
+ 321   2                      RI = 0;
+ 322   2                      
+ 323   2                      devUart_dataRcvBuf.dataRcv_tmp[devUart_dataRcvBuf.dataRcvIst_tmp ++] = SBUF;
+ 324   2                      if(devUart_dataRcvBuf.dataRcvIst_tmp >= (UART_DATA_RX_QLEN - 1))
+ 325   2                              devUart_dataRcvBuf.dataRcvIst_tmp = (UART_DATA_RX_QLEN - 1);
+ 326   2                      
+ 327   2                      if(!devUart_dataRcvJudgeAttr.rcvStart_flg)
+ 328   2                              devUart_dataRcvJudgeAttr.rcvStart_flg = 1;
+ 329   2                      devUart_dataRcvJudgeAttr.rcvTimeout_counter = devUart_dataRcvJudgeAttr.rcvTimeout_period;
+ 330   2              }
+ 331   1      }
+ 332          
+ 333          void funcInterrupt_externalInt1(void) interrupt INT1_VECTOR
+ 334          {
+ 335   1              switch(deviceRunningParam.deviceType){
+ 336   2              
+ 337   2                      case devTypeDef_dimmer:
+ 338   2                              
+ 339   2                              devDimmer_freqParam.periodBeat_cfm = devDimmer_freqParam.periodBeat_counter;
+ 340   2                              devDimmer_freqParam.periodBeat_counter = 0;
+ 341   2                              
+ 342   2                              devDimmer_freqParam.pwm_actEN = 1;
+ 343   2                              devDimmer_freqParam.pwm_actWaitCounter = DEV_DIMMER_MODULATION_TIME_LAG;
+ 344   2                              
+ 345   2                              devDimmer_debugParam.frepCounter ++;
+ 346   2                      
+ 347   2                              break;
+ 348   2                      
+ 349   2                      case devTypeDef_fans:
+ 350   2                              
+ 351   2                              devFans_freqParam.periodBeat_cfm = devFans_freqParam.periodBeat_counter;
+ 352   2                              devFans_freqParam.periodBeat_counter = 0;
+ 353   2                              
+ 354   2                              devFans_freqParam.pwm_actEN = 1;
+ 355   2                              devFans_freqParam.pwm_actWaitCounter = DEV_FANS_MODULATION_TIME_LAG;
+ 356   2                              
+ 357   2                              devFans_debugParam.frepCounter ++;
+ 358   2                      
+ 359   2                              break;
+ 360   2                      
+ 361   2                      default:break;
+ 362   2              }
+ 363   1      }
+ 364          
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 7   
+
+ 365          void funcInterrupt_timer0(void) interrupt TIMER0_VECTOR //50us
+ 366          {       
+ 367   1              switch(deviceRunningParam.deviceType){
+ 368   2              
+ 369   2                      case devTypeDef_dimmer:{ //µ÷¹âÒµÎñ
+ 370   3                      
+ 371   3                              const  uint16_t period_dimmerFollow = 400 - 1; //¸úËæËÙ¶È
+ 372   3                              static uint16_t counter_dimmerFollow = 0; 
+ 373   3                                              
+ 374   3                              uint8_t freq_periodBeatHalf = devDimmer_freqParam.periodBeat_cfm / 2;
+ 375   3                              
+ 376   3                              devDimmer_freqParam.periodBeat_counter ++;
+ 377   3                              
+ 378   3                              if(0 != devDimmer_freqParam.breightness){
+ 379   4      
+ 380   4      #if(1 == DEV_DIMMER_FULL_LOAD_EN)
+                                              if(100 == devDimmer_freqParam.breightness){
+                                                      DEV_DIMMER_PIN_OUTPUT_SET(1);
+                                              }else
+              #endif
+ 385   4                                      if(devDimmer_freqParam.pwm_actEN){
+ 386   5                                                      
+ 387   5                                              if(devDimmer_freqParam.pwm_actWaitCounter)devDimmer_freqParam.pwm_actWaitCounter --;
+ 388   5                                              else{
+ 389   6                                              
+ 390   6                                                      devDimmer_freqParam.pwm_actCounter ++;
+ 391   6                                                      if(devDimmer_freqParam.pwm_actCounter <= devDimmer_freqParam.breightness && devDimmer_freqParam.pwm_
+             -actCounter < freq_periodBeatHalf){ //
+ 392   7                                                                      
+ 393   7                                                              DEV_DIMMER_PIN_OUTPUT_SET(1);
+ 394   7                                                      }
+ 395   6                                                      else
+ 396   6                                                      {
+ 397   7                                                              DEV_DIMMER_PIN_OUTPUT_SET(0);
+ 398   7                                                              
+ 399   7                                                              devDimmer_freqParam.pwm_actCounter = 0;
+ 400   7                                                              devDimmer_freqParam.pwm_actEN = 0;
+ 401   7                                                      }
+ 402   6                                              }
+ 403   5                                      }
+ 404   4                              }
+ 405   3                              else
+ 406   3                              {
+ 407   4                                      devDimmer_freqParam.pwm_actEN = 0;
+ 408   4                                      DEV_DIMMER_PIN_OUTPUT_SET(0);
+ 409   4                              }
+ 410   3                              
+ 411   3                              if(counter_dimmerFollow < period_dimmerFollow)counter_dimmerFollow ++; //ÁÁ¶È¶èÐÔ¸úËæ
+ 412   3                              else{
+ 413   4                              
+ 414   4                                      counter_dimmerFollow = 0;
+ 415   4                                      
+ 416   4                                      if(devDimmer_freqParam.breightness != deviceRunningParam.devStatus.deviceDimmer_brightness){
+ 417   5                                      
+ 418   5                                              (devDimmer_freqParam.breightness < deviceRunningParam.devStatus.deviceDimmer_brightness)?
+ 419   5                                                      (devDimmer_freqParam.breightness ++):
+ 420   5                                                      (devDimmer_freqParam.breightness --);
+ 421   5                                      }
+ 422   4                              }
+ 423   3                      
+ 424   3                      }break;
+ 425   2                      
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 8   
+
+ 426   2                      case devTypeDef_fans:{
+ 427   3                      
+ 428   3                              const  uint16_t modulationAnchorPoint = 150; //Ãª¶¨µã(STCÖ»ÄÜµ¥¶ÀÏÂ½µÑØ£¬ËùÒÔÃªµãÌáÇ°£¬Ô­ÃªµãÊÇ200£¬150
+             -×î¼Ñµã£¬·½±ã·Å´ó)
+ 429   3                              const  uint16_t period_fansFollow = 1000 - 1; //¸úËæËÙ¶È
+ 430   3                              static uint16_t counter_fansFollow = 0; 
+ 431   3                              uint16_t vatFltSpeedTarget = devFans_freqParam.speed * 3 / 2;
+ 432   3                              
+ 433   3                              devFans_freqParam.periodBeat_counter ++;
+ 434   3                              
+ 435   3                              if(0 != devFans_freqParam.speed){
+ 436   4      
+ 437   4      #if(1 == DEV_FAN_FULL_LOAD_EN)
+ 438   4                                      if(100 == devFans_freqParam.speed){ //È«¿ª
+ 439   5                                              DEV_FANS_PIN_OUTPUT_SET(1);
+ 440   5                                      }else
+ 441   4      #endif
+ 442   4                                      if(devFans_freqParam.pwm_actEN){        
+ 443   5                                              
+ 444   5                                              if(devFans_freqParam.periodBeat_counter > (modulationAnchorPoint - devFans_freqParam.speed)){ //ºóÑØÇ
+             -ÐÏà
+ 445   6      //                                      if(devFans_freqParam.periodBeat_counter > (modulationAnchorPoint - vatFltSpeedTarget)){ //ºóÑØÇÐÏà
+ 446   6                                                              
+ 447   6                                                      if(devFans_freqParam.periodBeat_counter > modulationAnchorPoint){
+ 448   7                                                              DEV_FANS_PIN_OUTPUT_SET(0);
+ 449   7                                                      }
+ 450   6                                                      else{
+ 451   7                                                              DEV_FANS_PIN_OUTPUT_SET(1);
+ 452   7                                                      }
+ 453   6                                              }
+ 454   5                                              else{
+ 455   6                                                      DEV_FANS_PIN_OUTPUT_SET(0);
+ 456   6                                              }
+ 457   5                                      }
+ 458   4                              }
+ 459   3                              else
+ 460   3                              {
+ 461   4                                      devFans_freqParam.pwm_actEN = 0;
+ 462   4                                      DEV_FANS_PIN_OUTPUT_SET(0);
+ 463   4                              }
+ 464   3                              
+ 465   3                              if(counter_fansFollow < period_fansFollow)counter_fansFollow ++; //ËÙ¶È¶èÐÔ¸úËæ
+ 466   3                              else{
+ 467   4                              
+ 468   4                                      counter_fansFollow = 0;
+ 469   4                                      
+ 470   4      #if(1 == DEV_FAN_SHOCK_EXCUTE_EN)
+                              
+                                              if(TRUE == devFans_excuteActivated_flg){ //³å»÷±êÖ¾£º¸øÓë³õËÙ¶È
+                                                      
+                                                      if(devFans_freqParam.speed < 100){
+                                                              devFans_freqParam.speed ++;
+                                                      }else{
+                                                              devFans_excuteActivated_flg = FALSE;
+                                                      }
+                                              }else{
+              
+                                                      if(devFans_freqParam.speed != deviceRunningParam.devStatus.deviceFans_speed){
+                                                              
+                                                              (devFans_freqParam.speed < deviceRunningParam.devStatus.deviceFans_speed)?
+                                                                      (devFans_freqParam.speed ++):
+                                                                      (devFans_freqParam.speed --);
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 9   
+
+                                                      }                                       
+                                              }
+              #else
+ 489   4      
+ 490   4                                      if(devFans_freqParam.speed != deviceRunningParam.devStatus.deviceFans_speed){
+ 491   5                                              
+ 492   5                                              (devFans_freqParam.speed < deviceRunningParam.devStatus.deviceFans_speed)?
+ 493   5                                                      (devFans_freqParam.speed ++):
+ 494   5                                                      (devFans_freqParam.speed --);
+ 495   5                                      }       
+ 496   4      #endif
+ 497   4                              }
+ 498   3                      
+ 499   3                      }break;
+ 500   2                      
+ 501   2                      default:break;
+ 502   2              }
+ 503   1              
+ 504   1              if(ltmrMsSpfy.ltmrCounter)ltmrMsSpfy.ltmrCounter --;
+ 505   1              else{
+ 506   2                      ltmrMsSpfy.ltmrCounter = ltmrMsSpfy.ltmrPeriod;
+ 507   2                      
+ 508   2                      if(dataReq_actionCounter)dataReq_actionCounter --;
+ 509   2                      
+ 510   2                      if(devUart_dataRcvJudgeAttr.rcvStart_flg){
+ 511   3                              if(devUart_dataRcvJudgeAttr.rcvTimeout_counter)devUart_dataRcvJudgeAttr.rcvTimeout_counter --;
+ 512   3                              else{
+ 513   4                                      devUart_dataRcvBuf.dataRcvTout_trigFlg = 1;
+ 514   4                                      devUart_dataRcvJudgeAttr.rcvStart_flg = 0;
+ 515   4                              }
+ 516   3                      }
+ 517   2                      
+ 518   2                      if(ltmrWdtSpfy.ltmrCounter)ltmrWdtSpfy.ltmrCounter --;
+ 519   2                      else{
+ 520   3                              ltmrWdtSpfy.ltmrCounter = ltmrWdtSpfy.ltmrPeriod;
+ 521   3                              systemFunc_wdtFeed();
+ 522   3                      }
+ 523   2              }
+ 524   1              
+ 525   1              if(ltmrSecondSpfy.ltmrCounter)ltmrSecondSpfy.ltmrCounter --;
+ 526   1              else{
+ 527   2                      ltmrSecondSpfy.ltmrCounter = ltmrSecondSpfy.ltmrPeriod;
+ 528   2                      
+ 529   2                      if(ltmr_a.ltmrCounter)ltmr_a.ltmrCounter --;
+ 530   2                      else{
+ 531   3                              ltmr_a.ltmrCounter = ltmr_a.ltmrPeriod;
+ 532   3                              ltmr_a.ltmr_tUpFlg = 1;
+ 533   3                      }
+ 534   2                      
+ 535   2                      switch(deviceRunningParam.deviceType){
+ 536   3      
+ 537   3                              case devTypeDef_dimmer:{
+ 538   4                              
+ 539   4                                      //µ÷¹âµ÷ÊÔÊý¾Ý¸üÐÂ
+ 540   4                                      devDimmer_debugParam.frepConfirm = devDimmer_debugParam.frepCounter;
+ 541   4                                      devDimmer_debugParam.frepCounter = 0;
+ 542   4                                      
+ 543   4                              }break;
+ 544   3                              
+ 545   3                              case devTypeDef_fans:{
+ 546   4                              
+ 547   4                                      //·çÉÈµ÷ÊÔÊý¾Ý¸üÐÂ
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 10  
+
+ 548   4                                      devFans_debugParam.frepConfirm = devFans_debugParam.frepCounter;
+ 549   4                                      devFans_debugParam.frepCounter = 0;
+ 550   4                                      
+ 551   4                              }break;
+ 552   3                              
+ 553   3                              default:break;
+ 554   3                      }
+ 555   2              }
+ 556   1      }
+ 557          
+ 558          static void process_uartDataRcv_timeOut_funcHandle(void){
+ 559   1              
+ 560   1              if(devUart_dataRcvBuf.dataRcvTout_trigFlg){
+ 561   2              
+ 562   2                      devUart_dataRcvBuf.dataRcvTout_trigFlg = 0;
+ 563   2                      
+ 564   2                      memset(devUart_dataRcvBuf.dataRcv_cfm, 0, sizeof(uint8_t) * UART_DATA_RX_QLEN);
+ 565   2                      memcpy(devUart_dataRcvBuf.dataRcv_cfm, devUart_dataRcvBuf.dataRcv_tmp, sizeof(uint8_t) * UART_DATA_RX_QL
+             -EN);
+ 566   2                      devUart_dataRcvBuf.dataRcvLen_cfm = devUart_dataRcvBuf.dataRcvIst_tmp;
+ 567   2                      memset(devUart_dataRcvBuf.dataRcv_tmp, 0, sizeof(uint8_t) * UART_DATA_RX_QLEN);
+ 568   2                      devUart_dataRcvBuf.dataRcvIst_tmp = 0;
+ 569   2                      
+ 570   2                      devUart_dataRcvBuf.dataRcvTout_completeFlg = 1;
+ 571   2              }
+ 572   1      }
+ 573          
+ 574          static void usrApp_deviceDriverByMcu_applicationExecute(uint8_t cmd, uint8_t dat){
+ 575   1      
+ 576   1              uint8_t loop = 0;
+ 577   1              
+ 578   1              switch(cmd){
+ 579   2              
+ 580   2                      case 1:{ //Éè±¸ÀàÐÍ
+ 581   3                      
+ 582   3                              deviceRunningParam.deviceType = dat;
+ 583   3                              memset(&deviceRunningParam.devStatus, 0, sizeof(struct __stt_devStatusDef));
+ 584   3                              
+ 585   3                      }break;
+ 586   2                      
+ 587   2                      case 2:{ //×´Ì¬Öµ
+ 588   3                      
+ 589   3                              switch(deviceRunningParam.deviceType){
+ 590   4                              
+ 591   4                                      case devTypeDef_scenario:{}break;
+ 592   4                                      
+ 593   4                                      case devTypeDef_dimmer:{
+ 594   5                                      
+ 595   5                                              deviceRunningParam.devStatus.deviceDimmer_brightness = dat;
+ 596   5                                      
+ 597   5                                      }break;
+ 598   4                                      
+ 599   4                                      case devTypeDef_fans:{
+ 600   5      
+ 601   5      #if(1 == DEV_FAN_SHOCK_EXCUTE_EN)                                       
+                                                      if(deviceRunningParam.devStatus.deviceFans_speed < dat)devFans_excuteActivated_flg = TRUE;
+              #endif
+ 604   5                                              deviceRunningParam.devStatus.deviceFans_speed = dat;
+ 605   5                                              
+ 606   5                                      }break;
+ 607   4                                      
+ 608   4                                      case devTypeDef_mulitSwOneBit:
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 11  
+
+ 609   4                                      case devTypeDef_mulitSwTwoBit:
+ 610   4                                      case devTypeDef_mulitSwThreeBit:
+ 611   4                                      case devTypeDef_curtain:
+ 612   4                                      case devTypeDef_thermostat:
+ 613   4                      case devTypeDef_heater:{}break;
+ 614   4      
+ 615   4                                      default:break;
+ 616   4                              }
+ 617   3                              
+ 618   3                      }break;
+ 619   2                      
+ 620   2                      default:break;
+ 621   2              }
+ 622   1      }
+ 623          
+ 624          static void process_bussinessDeviceDriver(void){
+ 625   1      
+ 626   1              if(devUart_dataRcvBuf.dataRcvTout_completeFlg){ //
+ 627   2              
+ 628   2                      devUart_dataRcvBuf.dataRcvTout_completeFlg = 0;
+ 629   2              
+ 630   2                      if((UART_DEVDRV_PROTOCOL_HEAD_M == devUart_dataRcvBuf.dataRcv_cfm[0]) && //
+ 631   2                         (sizeof(stt_protocolFmtUartDevDrv) == devUart_dataRcvBuf.dataRcvLen_cfm)){ //
+ 632   3                      
+ 633   3                              stt_protocolFmtUartDevDrv dataTemp = {0};
+ 634   3                              
+ 635   3                              memcpy(&dataTemp, devUart_dataRcvBuf.dataRcv_cfm, sizeof(stt_protocolFmtUartDevDrv));
+ 636   3                              if(frame_Check(devUart_dataRcvBuf.dataRcv_cfm, sizeof(stt_protocolFmtUartDevDrv) - 1) == dataTemp.pTail
+             -Check){ //
+ 637   4                              
+ 638   4                                      usrApp_deviceDriverByMcu_applicationExecute(dataTemp.command, dataTemp.dats); //
+ 639   4      
+ 640   4                                      dataTemp.pHead = UART_DEVDRV_PROTOCOL_HEAD_S;
+ 641   4                                      dataTemp.pTailCheck = frame_Check((uint8_t *)&dataTemp, sizeof(stt_protocolFmtUartDevDrv) - 1);
+ 642   4                                      usrApp_uart1DataSend((uint8_t *)&dataTemp, sizeof(stt_protocolFmtUartDevDrv)); //
+ 643   4                              }
+ 644   3                              else
+ 645   3                              {
+ 646   4                                      usrApp_uart1StringSend("check err\n");
+ 647   4                              }
+ 648   3                      }       
+ 649   2                      else
+ 650   2                      {
+ 651   3                              usrApp_uart1StringSend("format err\n");
+ 652   3                      }
+ 653   2              }
+ 654   1      }
+ 655          
+ 656          static void devTest(void){
+ 657   1                      
+ 658   1              process_uartDataRcv_timeOut_funcHandle();
+ 659   1              
+ 660   1      //      if(devUart_dataRcvBuf.dataRcvTout_completeFlg){
+ 661   1      //              
+ 662   1      //              devUart_dataRcvBuf.dataRcvTout_completeFlg = 0;
+ 663   1      //      
+ 664   1      //              if(!strcmp("open", (const char *)devUart_dataRcvBuf.dataRcv_cfm)){
+ 665   1      //              
+ 666   1      //                      usrApp_uart1StringSend("ok\n");
+ 667   1      //              }
+ 668   1      //              else
+ 669   1      //              {
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 12  
+
+ 670   1      //                      usrApp_uart1DataSend(devUart_dataRcvBuf.dataRcv_cfm, devUart_dataRcvBuf.dataRcvLen_cfm);
+ 671   1      //              }
+ 672   1      //      }
+ 673   1      //
+ 674   1      //      delay(1000);
+ 675   1      //      UART1_PRINTF("soft mark\n");
+ 676   1      //
+ 677   1      //      if(!dataReq_actionCounter){
+ 678   1      //              
+ 679   1      //              dataReq_actionCounter = 1000;
+ 680   1      //              
+ 681   1      //              usrApp_uart1StringSend("hard mark\n");
+ 682   1      //              
+ 683   1      //              GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
+ 684   1      //      }
+ 685   1      
+ 686   1              if(!dataReq_actionCounter){
+ 687   2                      
+ 688   2                      dataReq_actionCounter = 2000;
+ 689   2                                      
+ 690   2                      switch(deviceRunningParam.deviceType){
+ 691   3                      
+ 692   3                              case devTypeDef_dimmer:{
+ 693   4                              
+ 694   4                                      memset(devUart_dataSendBuf, 0, UART_DATA_RX_QLEN * sizeof(char));
+ 695   4                                      sprintf((char *)devUart_dataSendBuf, 
+ 696   4                                                      "[devDimmer]source freq:%dHz, loadVal:%d\n", 
+ 697   4                                                      (int)devDimmer_debugParam.frepConfirm,
+ 698   4                                                      (int)deviceRunningParam.devStatus.deviceDimmer_brightness);
+ 699   4                                      usrApp_uart1StringSend((char *)devUart_dataSendBuf);
+ 700   4                                                      
+ 701   4                              }break;
+ 702   3                              
+ 703   3                              case devTypeDef_fans:{
+ 704   4                              
+ 705   4                                      memset(devUart_dataSendBuf, 0, UART_DATA_RX_QLEN * sizeof(char));
+ 706   4                                      sprintf((char *)devUart_dataSendBuf, 
+ 707   4                                                      "[devFans]source freq:%dHz, beatPeriod:%d, loadVal:%d\n", 
+ 708   4                                                      (int)devFans_debugParam.frepConfirm,
+ 709   4                                                      (int)devFans_freqParam.periodBeat_cfm,
+ 710   4                                                      (int)deviceRunningParam.devStatus.deviceFans_speed);
+ 711   4                                      usrApp_uart1StringSend((char *)devUart_dataSendBuf);
+ 712   4                                                      
+ 713   4                              }break;
+ 714   3                              
+ 715   3                              default:break;
+ 716   3                      }               
+ 717   2              }
+ 718   1              
+ 719   1              if(devUart_dataRcvBuf.dataRcvTout_completeFlg){
+ 720   2              
+ 721   2                      devUart_dataRcvBuf.dataRcvTout_completeFlg = 0;
+ 722   2                      
+ 723   2                      if(!strcmp("devDef fans", (const char *)devUart_dataRcvBuf.dataRcv_cfm)){
+ 724   3                      
+ 725   3                              deviceRunningParam.deviceType = devTypeDef_fans;
+ 726   3                              usrApp_uart1StringSend("ok\n");
+ 727   3                      }else
+ 728   2                      if(!strcmp("devDef dimmer", (const char *)devUart_dataRcvBuf.dataRcv_cfm)){
+ 729   3                      
+ 730   3                              deviceRunningParam.deviceType = devTypeDef_dimmer;
+ 731   3                              usrApp_uart1StringSend("ok\n");
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 13  
+
+ 732   3                      }else
+ 733   2                      switch(deviceRunningParam.deviceType){
+ 734   3                      
+ 735   3                              case devTypeDef_dimmer:{
+ 736   4                              
+ 737   4                                      if(!strcmp("open", (const char *)devUart_dataRcvBuf.dataRcv_cfm)){
+ 738   5                                      
+ 739   5                                              usrApp_uart1StringSend("ok\n");
+ 740   5                                      }
+ 741   4                                      else
+ 742   4                                      if(!strcmp("close", (const char *)devUart_dataRcvBuf.dataRcv_cfm)){
+ 743   5                                      
+ 744   5                                              usrApp_uart1StringSend("ok\n");
+ 745   5                                      }
+ 746   4                                      else
+ 747   4                                      if(!memcmp("brightness:", (const uint8_t *)devUart_dataRcvBuf.dataRcv_cfm, 11)){
+ 748   5                                      
+ 749   5                                              int brightness = 0;
+ 750   5                                              
+ 751   5      //                                      brightness = ((devUart_dataRcvBuf.dataRcv_cfm[11] - '0') * 10) +
+ 752   5      //                                                               ((devUart_dataRcvBuf.dataRcv_cfm[12] - '0') * 1);
+ 753   5                                              
+ 754   5      //                                      if(brightness <= 100){
+ 755   5      //                                      
+ 756   5      //                                              usrApp_uart1StringSend("ok\n");
+ 757   5      //                                              deviceRunningParam.devStatus.deviceDimmer_brightness = brightness;
+ 758   5      //                                      }
+ 759   5      //                                      else
+ 760   5      //                                      {
+ 761   5      //                                              usrApp_uart1StringSend("format err\n");
+ 762   5      //                                      }
+ 763   5                                              
+ 764   5                                              if(sscanf(&devUart_dataRcvBuf.dataRcv_cfm[11], "%d", (int *)&brightness)){
+ 765   6                                                      if(brightness <= 100){
+ 766   7                                                              usrApp_uart1StringSend("ok\n");
+ 767   7                                                              deviceRunningParam.devStatus.deviceDimmer_brightness = brightness;
+ 768   7                                                      }else{
+ 769   7                                                              usrApp_uart1StringSend("value too large!!!\n");
+ 770   7                                                      }
+ 771   6                                              }else{
+ 772   6                                                      usrApp_uart1StringSend("format err\n");
+ 773   6                                              }
+ 774   5                                              
+ 775   5                                      }else{
+ 776   5                                      
+ 777   5                                              usrApp_uart1StringSend("format err\n");
+ 778   5                                      }
+ 779   4                                      
+ 780   4                              }break;
+ 781   3                              
+ 782   3                              case devTypeDef_fans:{
+ 783   4                              
+ 784   4                                      if(!memcmp("speed:", (const uint8_t *)devUart_dataRcvBuf.dataRcv_cfm, 6)){
+ 785   5                                      
+ 786   5                                              int speed = 0;
+ 787   5                                              
+ 788   5      //                                      speed = ((devUart_dataRcvBuf.dataRcv_cfm[6] - '0') * 10) +
+ 789   5      //                                                      ((devUart_dataRcvBuf.dataRcv_cfm[7] - '0') * 1);
+ 790   5                              
+ 791   5      //                                      if(speed <= 100){
+ 792   5      //                                      
+ 793   5      //                                              usrApp_uart1StringSend("ok\n");
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 14  
+
+ 794   5      //                                              deviceRunningParam.devStatus.deviceFans_speed = speed;
+ 795   5      //                                      }
+ 796   5      //                                      else
+ 797   5      //                                      {
+ 798   5      //                                              usrApp_uart1StringSend("format err\n");
+ 799   5      //                                      }
+ 800   5                                              
+ 801   5                                              if(sscanf(&devUart_dataRcvBuf.dataRcv_cfm[6], "%d", (int *)&speed)){
+ 802   6                                                      if(speed <= 100){
+ 803   7                                                              usrApp_uart1StringSend("ok\n");
+ 804   7      #if(1 == DEV_FAN_SHOCK_EXCUTE_EN)
+                                                                      if(deviceRunningParam.devStatus.deviceFans_speed < speed)devFans_excuteActivated_flg = TRUE;
+              #endif                                                  
+ 807   7                                                              deviceRunningParam.devStatus.deviceFans_speed = speed;
+ 808   7                                                      }
+ 809   6                                                      else{
+ 810   7                                                              usrApp_uart1StringSend("value too large!!!\n");
+ 811   7                                                      }
+ 812   6                                              }else{
+ 813   6                                                      usrApp_uart1StringSend("format err\n");
+ 814   6                                              }
+ 815   5                                              
+ 816   5                                      }else{
+ 817   5                                      
+ 818   5                                              usrApp_uart1StringSend("format err\n");
+ 819   5                                      }
+ 820   4                                      
+ 821   4                              }break;
+ 822   3                              
+ 823   3                              default:
+ 824   3                                      usrApp_uart1StringSend("format err\n");
+ 825   3                                      break;
+ 826   3                      }
+ 827   2              }
+ 828   1      }
+ 829          
+ 830          void main(void){
+ 831   1              
+ 832   1              systemPeripheralsInitialization();
+ 833   1              
+ 834   1              for(;;){
+ 835   2      
+ 836   2      #if(PRJ_MODE_DEF == PRJ_MODE_DBG)
+                              devTest();
+              #else
+ 839   2                      process_uartDataRcv_timeOut_funcHandle(); //
+ 840   2                      process_bussinessDeviceDriver();
+ 841   2      #endif
+ 842   2                      
+ 843   2      //              if(ltmr_a.ltmr_tUpFlg){
+ 844   2      //                      ltmr_a.ltmr_tUpFlg = 0;
+ 845   2      //                      usrApp_uart1StringSend("hellow world!!!\n");
+ 846   2      //              }
+ 847   2              }
+ 848   1      }
+ 849          
+ 850          
+ 851          
+ 852          
+ 853          
+ 854          
+ 855          
+C51 COMPILER V9.54   USRMAIN                                                               04/26/2021 16:24:13 PAGE 15  
+
+ 856          
+ 857          
+ 858          
+ 859          
+ 860          
+ 861          
+ 862          
+ 863          
+ 864          
+ 865          
+ 866          
+ 867          
+ 868          
+ 869          
+ 870          
+ 871          
+ 872          
+ 873          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2175    ----
+   CONSTANT SIZE    =    205    ----
+   XDATA SIZE       =    239      23
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

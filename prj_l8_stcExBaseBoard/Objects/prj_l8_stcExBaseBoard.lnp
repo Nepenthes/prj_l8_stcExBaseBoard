@@ -1,0 +1,4 @@
+".\Objects\usrMain.obj" 
+TO ".\Objects\prj_l8_stcExBaseBoard" 
+
+PRINT(".\Listings\prj_l8_stcExBaseBoard.map") REMOVEUNUSED 

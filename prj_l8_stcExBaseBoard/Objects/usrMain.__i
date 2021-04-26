@@ -1,0 +1,1 @@
+"usrMain\usrMain.c" LARGE OMF2 OPTIMIZE (8,SPEED) BROWSE INCDIR(.\usrMain) DEBUG PRINT(.\Listings\usrMain.lst) OBJECT(.\Objects\usrMain.obj)
